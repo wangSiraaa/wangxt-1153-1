@@ -1,0 +1,17 @@
+{
+  "name": "grain-fumigation-system",
+  "version": "1.0.0",
+  "description": "粮库熏蒸作业安全监护系统",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "cd api && npm run dev",
+    "dev:web": "cd web && npm run dev",
+    "build": "cd api && npm run build && cd ../web && npm run build",
+    "start": "cd api && npm start",
+    "install:all": "cd api && npm install && cd ../web && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
