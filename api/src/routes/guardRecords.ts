@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import GuardRecord from '../models/GuardRecord';
 import FumigationPlan from '../models/FumigationPlan';
 import { BusinessRuleService } from '../services/BusinessRuleService';
+import { DoorControlService } from '../services/DoorControlService';
 
 const router = Router();
 
@@ -171,6 +172,11 @@ router.post('/:id/release', async (req: Request, res: Response) => {
         remark: releaseRemark || '解除警戒'
       });
       await plan.save();
+
+      await DoorControlService.unlockWarehouseAfterFumigation(
+        plan.warehouseId,
+        plan._id.toString()
+      );
     }
 
     res.json({ success: true, data: record, message: '警戒解除成功' });

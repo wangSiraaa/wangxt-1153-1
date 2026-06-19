@@ -42,7 +42,7 @@ export class DoorControlService {
 
       const pendingPlan = await FumigationPlan.findOne({
         warehouseId,
-        status: { $in: ['guard_confirmed', 'dosing_pending', 'evacuation_pending', 'dosing_completed'] }
+        status: { $in: ['guard_pending', 'guard_confirmed', 'dosing_pending', 'evacuation_pending', 'dosing_completed'] }
       });
 
       if (pendingPlan) {

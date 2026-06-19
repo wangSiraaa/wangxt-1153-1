@@ -44,7 +44,7 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: '熏蒸计划不存在' });
     }
 
-    if (plan.status !== 'fumigating' && plan.status !== 'ventilation_pending') {
+    if (plan.status !== 'dosing_completed' && plan.status !== 'fumigating' && plan.status !== 'ventilation_pending') {
       return res.status(400).json({ success: false, message: `当前状态[${plan.status}]不允许创建通风检测记录` });
     }
 
@@ -193,32 +193,12 @@ router.post('/:id/add-detection', async (req: Request, res: Response) => {
     });
 
     record.finalConcentration = gasConcentration;
-    record.isQualified = qualified;
     await record.save();
-
-    if (qualified) {
-      const plan = await FumigationPlan.findById(record.fumigationPlanId);
-      if (plan && plan.status !== 'detection_passed') {
-        plan.status = 'detection_passed';
-        plan.statusHistory.push({
-          status: 'detection_passed',
-          operator: detector,
-          operatorName: detectorName,
-          timestamp: new Date(),
-          remark: `气体检测达标，浓度${gasConcentration}mg/m³`
-        });
-        await plan.save();
-      }
-      record.qualifiedAt = new Date();
-      record.qualifiedBy = detector;
-      record.qualifiedByName = detectorName;
-      await record.save();
-    }
 
     res.json({ 
       success: true, 
       data: record, 
-      message: qualified ? '检测结果达标' : '检测结果未达标，请继续通风' 
+      message: qualified ? '检测结果达标，待安环员确认' : '检测结果未达标，请继续通风' 
     });
   } catch (error) {
     res.status(500).json({ success: false, message: '添加检测记录失败', error: (error as Error).message });
@@ -245,11 +225,6 @@ router.post('/:id/confirm-qualified', async (req: Request, res: Response) => {
     const lastDetection = record.detectionRecords[record.detectionRecords.length - 1];
     if (!lastDetection.isQualified) {
       return res.status(400).json({ success: false, message: '最近一次检测未达标' });
-    }
-
-    const validation = await BusinessRuleService.canReleaseGuard(record.fumigationPlanId);
-    if (!validation.valid) {
-      return res.status(400).json({ success: false, message: validation.message });
     }
 
     record.isQualified = true;

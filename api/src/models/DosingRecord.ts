@@ -69,8 +69,8 @@ const DosingRecordSchema: Schema = new Schema({
   evacuationCheck: [{
     area: { type: String, required: true },
     checked: { type: Boolean, default: false },
-    checker: { type: String, required: true },
-    checkTime: { type: Date, required: true, default: Date.now }
+    checker: { type: String, default: '' },
+    checkTime: { type: Date, default: null }
   }]
 }, { timestamps: true });
 

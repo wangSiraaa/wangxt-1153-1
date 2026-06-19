@@ -216,12 +216,26 @@ router.post('/:id/add-evacuation-check', async (req: Request, res: Response) => 
     }
 
     const { area, checked, checker, checkTime } = req.body;
-    record.evacuationCheck.push({ area, checked, checker, checkTime: checkTime || new Date() });
+    
+    const existingIndex = record.evacuationCheck.findIndex(c => c.area === area);
+    if (existingIndex >= 0) {
+      record.evacuationCheck[existingIndex].checked = checked !== undefined ? checked : record.evacuationCheck[existingIndex].checked;
+      record.evacuationCheck[existingIndex].checker = checker || record.evacuationCheck[existingIndex].checker;
+      record.evacuationCheck[existingIndex].checkTime = checkTime || new Date();
+    } else {
+      record.evacuationCheck.push({ 
+        area, 
+        checked: checked !== undefined ? checked : false, 
+        checker: checker || '', 
+        checkTime: checkTime || new Date() 
+      });
+    }
+    
     await record.save();
 
-    res.json({ success: true, data: record, message: '添加撤离检查记录成功' });
+    res.json({ success: true, data: record, message: '更新撤离检查记录成功' });
   } catch (error) {
-    res.status(500).json({ success: false, message: '添加失败', error: (error as Error).message });
+    res.status(500).json({ success: false, message: '更新失败', error: (error as Error).message });
   }
 });
 
