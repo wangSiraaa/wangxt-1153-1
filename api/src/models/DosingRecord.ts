@@ -13,11 +13,29 @@ export interface IDosingRecord extends Document {
     idCard: string;
     contact: string;
   }>;
+  evacuationList: Array<{
+    name: string;
+    role: string;
+    idCard: string;
+    contact: string;
+    originalLocation: string;
+    evacuatedTo: string;
+    confirmed: boolean;
+    confirmedBy?: string;
+    confirmedAt?: Date;
+  }>;
   evacuationCompleted: boolean;
   evacuationCompletedAt?: Date;
   evacuationConfirmedBy?: string;
   evacuationConfirmedByName?: string;
+  guardConfirmed: boolean;
+  guardConfirmedAt?: Date;
+  guardConfirmedBy?: string;
+  guardConfirmedByName?: string;
+  guardRecordId?: string;
   actualDosage: number;
+  dosageUnit: string;
+  dosingStatus?: 'pending' | 'in_progress' | 'completed';
   dosingStartTime?: Date;
   dosingEndTime?: Date;
   constructionLeader: string;
@@ -28,11 +46,14 @@ export interface IDosingRecord extends Document {
   dosingPoints: number;
   dosingRemarks: string;
   allPersonnelEvacuated: boolean;
+  remark?: string;
   evacuationCheck: Array<{
     area: string;
     checked: boolean;
     checker: string;
     checkTime: Date;
+    personnelCount: number;
+    remark: string;
   }>;
   createdAt: Date;
   updatedAt: Date;
@@ -51,11 +72,29 @@ const DosingRecordSchema: Schema = new Schema({
     idCard: { type: String, required: true },
     contact: { type: String, required: true }
   }],
+  evacuationList: [{
+    name: { type: String, required: true },
+    role: { type: String, required: true },
+    idCard: { type: String, required: true },
+    contact: { type: String, required: true },
+    originalLocation: { type: String, default: '' },
+    evacuatedTo: { type: String, default: '' },
+    confirmed: { type: Boolean, default: false },
+    confirmedBy: { type: String, default: null },
+    confirmedAt: { type: Date, default: null }
+  }],
   evacuationCompleted: { type: Boolean, default: false },
   evacuationCompletedAt: { type: Date, default: null },
   evacuationConfirmedBy: { type: String, default: null },
   evacuationConfirmedByName: { type: String, default: null },
+  guardConfirmed: { type: Boolean, default: false },
+  guardConfirmedAt: { type: Date, default: null },
+  guardConfirmedBy: { type: String, default: null },
+  guardConfirmedByName: { type: String, default: null },
+  guardRecordId: { type: String, default: null },
   actualDosage: { type: Number, default: 0 },
+  dosageUnit: { type: String, default: 'kg' },
+  dosingStatus: { type: String, enum: ['pending', 'in_progress', 'completed'], default: 'pending' },
   dosingStartTime: { type: Date, default: null },
   dosingEndTime: { type: Date, default: null },
   constructionLeader: { type: String, required: true },
@@ -66,11 +105,14 @@ const DosingRecordSchema: Schema = new Schema({
   dosingPoints: { type: Number, default: 0 },
   dosingRemarks: { type: String, default: '' },
   allPersonnelEvacuated: { type: Boolean, default: false },
+  remark: { type: String, default: '' },
   evacuationCheck: [{
     area: { type: String, required: true },
     checked: { type: Boolean, default: false },
     checker: { type: String, default: '' },
-    checkTime: { type: Date, default: null }
+    checkTime: { type: Date, default: null },
+    personnelCount: { type: Number, default: 0 },
+    remark: { type: String, default: '' }
   }]
 }, { timestamps: true });
 

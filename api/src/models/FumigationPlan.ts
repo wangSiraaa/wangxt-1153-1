@@ -3,6 +3,8 @@ import mongoose, { Schema, Document } from 'mongoose';
 export type FumigationStatus = 
   | 'draft'
   | 'submitted'
+  | 'safety_review_pending'
+  | 'safety_reviewed'
   | 'guard_pending'
   | 'guard_confirmed'
   | 'dosing_pending'
@@ -11,6 +13,7 @@ export type FumigationStatus =
   | 'fumigating'
   | 'ventilation_pending'
   | 'ventilating'
+  | 'recheck_pending'
   | 'detection_pending'
   | 'detection_passed'
   | 'guard_released'
@@ -22,9 +25,23 @@ export interface IFumigationPlan extends Document {
   warehouseId: string;
   warehouseCode: string;
   warehouseName: string;
+  grainType: string;
+  grainQuantity: number;
   chemicalId: string;
   chemicalName: string;
   chemicalDosage: number;
+  warningScope: string;
+  warningScopeDetail: Array<{
+    direction: string;
+    distance: number;
+    description: string;
+  }>;
+  archiveNo: string;
+  safetyReviewStatus: 'pending' | 'reviewed' | 'rejected';
+  safetyReviewer?: string;
+  safetyReviewerName?: string;
+  safetyReviewedAt?: Date;
+  safetyReviewRemark?: string;
   plannedStartDate: Date;
   plannedEndDate: Date;
   actualStartDate?: Date;
@@ -56,9 +73,27 @@ const FumigationPlanSchema: Schema = new Schema({
   warehouseId: { type: String, required: true },
   warehouseCode: { type: String, required: true },
   warehouseName: { type: String, required: true },
+  grainType: { type: String, required: true },
+  grainQuantity: { type: Number, required: true, default: 0 },
   chemicalId: { type: String, required: true },
   chemicalName: { type: String, required: true },
   chemicalDosage: { type: Number, required: true },
+  warningScope: { type: String, required: true },
+  warningScopeDetail: [{
+    direction: { type: String, required: true },
+    distance: { type: Number, required: true },
+    description: { type: String, default: '' }
+  }],
+  archiveNo: { type: String, default: '' },
+  safetyReviewStatus: { 
+    type: String, 
+    enum: ['pending', 'reviewed', 'rejected'], 
+    default: 'pending' 
+  },
+  safetyReviewer: { type: String, default: null },
+  safetyReviewerName: { type: String, default: null },
+  safetyReviewedAt: { type: Date, default: null },
+  safetyReviewRemark: { type: String, default: '' },
   plannedStartDate: { type: Date, required: true },
   plannedEndDate: { type: Date, required: true },
   actualStartDate: { type: Date, default: null },
@@ -72,9 +107,10 @@ const FumigationPlanSchema: Schema = new Schema({
   status: { 
     type: String, 
     enum: [
-      'draft', 'submitted', 'guard_pending', 'guard_confirmed',
+      'draft', 'submitted', 'safety_review_pending', 'safety_reviewed',
+      'guard_pending', 'guard_confirmed',
       'dosing_pending', 'evacuation_pending', 'dosing_completed',
-      'fumigating', 'ventilation_pending', 'ventilating',
+      'fumigating', 'ventilation_pending', 'ventilating', 'recheck_pending',
       'detection_pending', 'detection_passed', 'guard_released',
       'completed', 'cancelled'
     ], 

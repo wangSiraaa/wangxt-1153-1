@@ -15,6 +15,13 @@ const generatePlanNo = (): string => {
   return `FUM-${dateStr}-${random}`;
 };
 
+const generateArchiveNo = (warehouseCode: string): string => {
+  const date = new Date();
+  const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
+  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  return `FA-${warehouseCode}-${dateStr}-${random}`;
+};
+
 router.get('/', async (req: Request, res: Response) => {
   try {
     const { status, warehouseId, page = '1', pageSize = '10' } = req.query;
@@ -57,6 +64,7 @@ router.post('/', async (req: Request, res: Response) => {
     const planData = req.body;
     planData.planNo = generatePlanNo();
     planData.status = 'draft' as FumigationStatus;
+    planData.safetyReviewStatus = 'pending';
     planData.statusHistory = [{
       status: 'draft' as FumigationStatus,
       operator: planData.storageOperator,
@@ -102,6 +110,12 @@ router.post('/:id/submit', async (req: Request, res: Response) => {
     }
 
     const { operator, operatorName } = req.body;
+
+    const submitValidation = await BusinessRuleService.canSubmitPlan(plan._id.toString());
+    if (!submitValidation.valid) {
+      return res.status(400).json({ success: false, message: submitValidation.message });
+    }
+
     const validation = await BusinessRuleService.validateStatusTransition(
       plan.status,
       'submitted',
@@ -112,19 +126,72 @@ router.post('/:id/submit', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: validation.message });
     }
 
+    plan.archiveNo = generateArchiveNo(plan.warehouseCode);
     plan.status = 'submitted';
     plan.statusHistory.push({
       status: 'submitted',
       operator,
       operatorName,
       timestamp: new Date(),
-      remark: '仓储员提交熏蒸计划'
+      remark: `仓储员提交熏蒸计划，作业档案号: ${plan.archiveNo}`
     });
     await plan.save();
 
-    res.json({ success: true, data: plan, message: '熏蒸计划提交成功' });
+    res.json({ success: true, data: plan, message: '熏蒸计划提交成功，等待安环员复核' });
   } catch (error) {
     res.status(500).json({ success: false, message: '提交失败', error: (error as Error).message });
+  }
+});
+
+router.post('/:id/safety-review', async (req: Request, res: Response) => {
+  try {
+    const plan = await FumigationPlan.findById(req.params.id);
+    if (!plan) {
+      return res.status(404).json({ success: false, message: '熏蒸计划不存在' });
+    }
+
+    const { operator, operatorName, reviewStatus, reviewRemark } = req.body;
+
+    const validation = await BusinessRuleService.canCompleteSafetyReview(plan._id.toString());
+    if (!validation.valid) {
+      return res.status(400).json({ success: false, message: validation.message });
+    }
+
+    if (reviewStatus === 'rejected') {
+      plan.safetyReviewStatus = 'rejected';
+      plan.safetyReviewer = operator;
+      plan.safetyReviewerName = operatorName;
+      plan.safetyReviewedAt = new Date();
+      plan.safetyReviewRemark = reviewRemark || '';
+      plan.statusHistory.push({
+        status: plan.status,
+        operator,
+        operatorName,
+        timestamp: new Date(),
+        remark: `安环员复核不通过: ${reviewRemark || ''}`
+      });
+      await plan.save();
+      return res.json({ success: true, data: plan, message: '安环员复核不通过，请修改计划后重新提交' });
+    }
+
+    plan.safetyReviewStatus = 'reviewed';
+    plan.safetyReviewer = operator;
+    plan.safetyReviewerName = operatorName;
+    plan.safetyReviewedAt = new Date();
+    plan.safetyReviewRemark = reviewRemark || '';
+    plan.status = 'safety_reviewed';
+    plan.statusHistory.push({
+      status: 'safety_reviewed',
+      operator,
+      operatorName,
+      timestamp: new Date(),
+      remark: `安环员复核通过${reviewRemark ? `: ${reviewRemark}` : ''}`
+    });
+    await plan.save();
+
+    res.json({ success: true, data: plan, message: '安环员复核通过，可以启动熏蒸流程' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: '复核失败', error: (error as Error).message });
   }
 });
 
@@ -133,6 +200,10 @@ router.post('/:id/start-process', async (req: Request, res: Response) => {
     const plan = await FumigationPlan.findById(req.params.id);
     if (!plan) {
       return res.status(404).json({ success: false, message: '熏蒸计划不存在' });
+    }
+
+    if (plan.safetyReviewStatus !== 'reviewed') {
+      return res.status(400).json({ success: false, message: '安环员未复核通过，不能启动熏蒸流程' });
     }
 
     const { operator, operatorName } = req.body;
@@ -157,7 +228,7 @@ router.post('/:id/start-process', async (req: Request, res: Response) => {
     });
     await plan.save();
 
-    res.json({ success: true, data: plan, message: '熏蒸流程已启动，仓房已锁定' });
+    res.json({ success: true, data: plan, message: '熏蒸流程已启动，仓房已锁定，请设置警戒条件' });
   } catch (error) {
     res.status(500).json({ success: false, message: '启动失败', error: (error as Error).message });
   }
@@ -184,6 +255,8 @@ router.post('/:id/transition/:targetStatus', async (req: Request, res: Response)
     }
 
     const statusRemarks: Record<string, string> = {
+      'safety_review_pending': '进入安环员复核阶段',
+      'safety_reviewed': '安环员复核通过',
       'guard_confirmed': '安环员确认警戒和通风条件',
       'dosing_pending': '进入投药准备阶段',
       'evacuation_pending': '开始人员撤离',
@@ -191,6 +264,7 @@ router.post('/:id/transition/:targetStatus', async (req: Request, res: Response)
       'fumigating': '进入熏蒸密闭阶段',
       'ventilation_pending': '进入通风准备阶段',
       'ventilating': '开始通风散气',
+      'recheck_pending': '进入通风复检阶段',
       'detection_pending': '进入气体检测阶段',
       'detection_passed': '气体检测达标',
       'guard_released': '解除警戒'
@@ -245,11 +319,118 @@ router.get('/:id/details', async (req: Request, res: Response) => {
         plan,
         guardRecord,
         dosingRecord,
-        ventilationRecord
+        ventilationRecord,
+        archive: {
+          archiveNo: plan.archiveNo,
+          grainType: plan.grainType,
+          grainQuantity: plan.grainQuantity,
+          warningScope: plan.warningScope,
+          warningScopeDetail: plan.warningScopeDetail,
+          actualDosage: dosingRecord?.actualDosage,
+          dosageUnit: dosingRecord?.dosageUnit,
+          evacuationList: dosingRecord?.evacuationList,
+          detectionRecords: ventilationRecord?.detectionRecords,
+          recheckRecords: ventilationRecord?.recheckRecords,
+          recheckCount: ventilationRecord?.recheckCount,
+          finalConcentration: ventilationRecord?.finalConcentration,
+          safetyReviewStatus: plan.safetyReviewStatus,
+          safetyReviewer: plan.safetyReviewerName,
+          safetyReviewedAt: plan.safetyReviewedAt,
+        }
       }
     });
   } catch (error) {
     res.status(500).json({ success: false, message: '查询失败', error: (error as Error).message });
+  }
+});
+
+router.get('/:id/archive', async (req: Request, res: Response) => {
+  try {
+    const plan = await FumigationPlan.findById(req.params.id);
+    if (!plan) {
+      return res.status(404).json({ success: false, message: '熏蒸计划不存在' });
+    }
+
+    const [guardRecord, dosingRecord, ventilationRecord] = await Promise.all([
+      GuardRecord.findOne({ fumigationPlanId: plan._id }),
+      DosingRecord.findOne({ fumigationPlanId: plan._id }),
+      VentilationRecord.findOne({ fumigationPlanId: plan._id })
+    ]);
+
+    const archive = {
+      archiveNo: plan.archiveNo,
+      planNo: plan.planNo,
+      basicInfo: {
+        warehouseCode: plan.warehouseCode,
+        warehouseName: plan.warehouseName,
+        grainType: plan.grainType,
+        grainQuantity: plan.grainQuantity,
+        chemicalName: plan.chemicalName,
+        plannedDosage: plan.chemicalDosage,
+        warningScope: plan.warningScope,
+        warningScopeDetail: plan.warningScopeDetail,
+        plannedStartDate: plan.plannedStartDate,
+        plannedEndDate: plan.plannedEndDate,
+        actualStartDate: plan.actualStartDate,
+        actualEndDate: plan.actualEndDate,
+      },
+      personnel: {
+        storageOperator: plan.storageOperatorName,
+        safetyOfficer: plan.safetyOfficerName,
+        constructionLeader: plan.constructionLeaderName,
+        safetyReviewer: plan.safetyReviewerName,
+      },
+      safetyReview: {
+        status: plan.safetyReviewStatus,
+        reviewer: plan.safetyReviewerName,
+        reviewedAt: plan.safetyReviewedAt,
+        remark: plan.safetyReviewRemark,
+      },
+      guard: guardRecord ? {
+        warningSigns: guardRecord.warningSigns,
+        ventilationFacility: guardRecord.ventilationFacility,
+        evacuationRoute: guardRecord.evacuationRoute,
+        emergencyEquipment: guardRecord.emergencyEquipment,
+        guardPersonnel: guardRecord.guardPersonnel,
+        guardConfirmedAt: guardRecord.guardConfirmedAt,
+        guardReleasedAt: guardRecord.guardReleasedAt,
+        guardReleasedBy: guardRecord.guardReleasedByName,
+      } : null,
+      dosing: dosingRecord ? {
+        actualDosage: dosingRecord.actualDosage,
+        dosageUnit: dosingRecord.dosageUnit,
+        evacuationList: dosingRecord.evacuationList,
+        evacuationCompletedAt: dosingRecord.evacuationCompletedAt,
+        evacuationConfirmedBy: dosingRecord.evacuationConfirmedByName,
+        dosingStartTime: dosingRecord.dosingStartTime,
+        dosingEndTime: dosingRecord.dosingEndTime,
+        dosingOperator: dosingRecord.dosingOperatorName,
+        dosingMethod: dosingRecord.dosingMethod,
+        dosingPoints: dosingRecord.dosingPoints,
+        evacuationCheck: dosingRecord.evacuationCheck,
+        allPersonnelEvacuated: dosingRecord.allPersonnelEvacuated,
+      } : null,
+      ventilation: ventilationRecord ? {
+        ventilationStartTime: ventilationRecord.ventilationStartTime,
+        ventilationEndTime: ventilationRecord.ventilationEndTime,
+        ventilationDuration: ventilationRecord.ventilationDuration,
+        ventilationMethod: ventilationRecord.ventilationMethod,
+        ventilationOperator: ventilationRecord.ventilationOperatorName,
+        detectionRecords: ventilationRecord.detectionRecords,
+        recheckRecords: ventilationRecord.recheckRecords,
+        recheckCount: ventilationRecord.recheckCount,
+        finalRecheckPassed: ventilationRecord.finalRecheckPassed,
+        finalConcentration: ventilationRecord.finalConcentration,
+        isQualified: ventilationRecord.isQualified,
+        qualifiedAt: ventilationRecord.qualifiedAt,
+        qualifiedBy: ventilationRecord.qualifiedByName,
+      } : null,
+      statusHistory: plan.statusHistory,
+    };
+
+    res.json({ success: true, data: archive });
+  } catch (error) {
+    res.status(500).json({ success: false, message: '查询档案失败', error: (error as Error).message });
   }
 });
 

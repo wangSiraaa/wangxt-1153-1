@@ -7,7 +7,25 @@ export interface DoorAccessResult {
   reason: string;
   fumigationPlanId?: string;
   planNo?: string;
+  fumigationStatus?: string;
 }
+
+const ACTIVE_FUMIGATION_STATUSES = [
+  'submitted',
+  'safety_review_pending', 
+  'safety_reviewed',
+  'guard_pending',
+  'guard_confirmed',
+  'dosing_pending',
+  'evacuation_pending',
+  'dosing_completed',
+  'fumigating',
+  'ventilation_pending',
+  'ventilating',
+  'recheck_pending',
+  'detection_pending',
+  'detection_passed',
+];
 
 export class DoorControlService {
 
@@ -25,34 +43,38 @@ export class DoorControlService {
       return { allowed: false, reason: '仓房已被锁定，禁止出入' };
     }
 
-    if (warehouse.status === 'fumigating') {
-      const activePlan = await FumigationPlan.findOne({
-        warehouseId,
-        status: { $in: ['fumigating', 'ventilating', 'detection_pending', 'detection_passed'] }
-      });
+    const activePlan = await FumigationPlan.findOne({
+      warehouseId,
+      status: { $in: ACTIVE_FUMIGATION_STATUSES }
+    }).sort({ createdAt: -1 });
 
-      if (activePlan) {
-        return {
-          allowed: false,
-          reason: `仓房正在熏蒸作业中[计划号: ${activePlan.planNo}]，禁止普通入库单打开仓门`,
-          fumigationPlanId: activePlan._id.toString(),
-          planNo: activePlan.planNo
-        };
-      }
+    if (activePlan) {
+      const statusMessages: Record<string, string> = {
+        'submitted': '熏蒸计划已提交待审核',
+        'safety_review_pending': '待安环员复核中',
+        'safety_reviewed': '已通过安环员复核',
+        'guard_pending': '警戒设置中',
+        'guard_confirmed': '警戒已确认',
+        'dosing_pending': '投药准备中',
+        'evacuation_pending': '人员撤离中',
+        'dosing_completed': '投药完成',
+        'fumigating': '熏蒸密闭中',
+        'ventilation_pending': '通风准备中',
+        'ventilating': '通风散气中',
+        'recheck_pending': '通风复检中',
+        'detection_pending': '气体检测中',
+        'detection_passed': '检测达标待解除警戒',
+      };
 
-      const pendingPlan = await FumigationPlan.findOne({
-        warehouseId,
-        status: { $in: ['guard_pending', 'guard_confirmed', 'dosing_pending', 'evacuation_pending', 'dosing_completed'] }
-      });
+      const statusDesc = statusMessages[activePlan.status] || '熏蒸作业进行中';
 
-      if (pendingPlan) {
-        return {
-          allowed: false,
-          reason: `仓房即将进行熏蒸作业[计划号: ${pendingPlan.planNo}]，禁止普通入库单打开仓门`,
-          fumigationPlanId: pendingPlan._id.toString(),
-          planNo: pendingPlan.planNo
-        };
-      }
+      return {
+        allowed: false,
+        reason: `仓房${statusDesc}[计划号: ${activePlan.planNo}]，熏蒸期间普通入库单禁止打开仓门`,
+        fumigationPlanId: activePlan._id.toString(),
+        planNo: activePlan.planNo,
+        fumigationStatus: activePlan.status,
+      };
     }
 
     return { allowed: true, reason: '仓门可以正常开启' };
@@ -72,6 +94,19 @@ export class DoorControlService {
       stockInOrder.doorAccessDenied = !accessResult.allowed;
       stockInOrder.doorAccessDeniedReason = accessResult.allowed ? '' : accessResult.reason;
       stockInOrder.fumigationCheckPassed = accessResult.allowed;
+
+      if (!accessResult.allowed) {
+        stockInOrder.blockedByFumigation = true;
+        stockInOrder.blockedFumigationPlanId = accessResult.fumigationPlanId || null;
+        stockInOrder.blockedFumigationPlanNo = accessResult.planNo || null;
+        stockInOrder.blockedFumigationStatus = accessResult.fumigationStatus || null;
+        stockInOrder.blockedAt = new Date();
+        stockInOrder.fumigationBlockRemark = accessResult.reason;
+        if (stockInOrder.status !== 'blocked') {
+          stockInOrder.status = 'blocked';
+        }
+      }
+
       await stockInOrder.save();
     }
 
@@ -123,6 +158,18 @@ export class DoorControlService {
     warehouse.currentFumigationPlanId = undefined;
     await warehouse.save();
 
+    const blockedOrders = await StockInOrder.find({
+      warehouseId,
+      status: 'blocked',
+      blockedFumigationPlanId: fumigationPlanId
+    });
+
+    for (const order of blockedOrders) {
+      order.status = 'draft';
+      order.blockedByFumigation = false;
+      await order.save();
+    }
+
     return { success: true, message: '仓房已成功解锁，恢复正常使用' };
   }
 
@@ -133,9 +180,12 @@ export class DoorControlService {
     planNo: string;
     status: string;
     startTime: Date;
+    warningScope: string;
+    grainType: string;
+    chemicalName: string;
   }>> {
     const plans = await FumigationPlan.find({
-      status: { $in: ['fumigating', 'ventilating', 'detection_pending', 'detection_passed'] }
+      status: { $in: ACTIVE_FUMIGATION_STATUSES }
     }).sort({ createdAt: -1 });
 
     return plans.map(plan => ({
@@ -144,7 +194,10 @@ export class DoorControlService {
       warehouseName: plan.warehouseName,
       planNo: plan.planNo,
       status: plan.status,
-      startTime: plan.actualStartDate || plan.createdAt
+      startTime: plan.actualStartDate || plan.createdAt,
+      warningScope: plan.warningScope || '',
+      grainType: plan.grainType || '',
+      chemicalName: plan.chemicalName || '',
     }));
   }
 }
